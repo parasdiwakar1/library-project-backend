@@ -2,17 +2,33 @@ import express from 'express';
 import mongoose from 'mongoose';
 import bodyParser from 'body-parser';
 import cors from 'cors';
+import helmet from 'helmet';
+import { body, validationResult } from 'express-validator';
+import dotenv from 'dotenv';
+
+dotenv.config(); // Load environment variables
 
 const app = express();
+
+// Middleware
 app.use(bodyParser.json());
 app.use(cors());
+app.use(helmet());
 
-mongoose.connect('mongodb+srv://paras22:BB2orhb1NHhtvT0J@cluster0.gejab.mongodb.net/bookData?retryWrites=true&w=majority&appName=Cluster0');
+// MongoDB Connection
+mongoose
+  .connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log('Connected to MongoDB'))
+  .catch((err) => console.error('MongoDB connection error:', err));
 
+// Book Schema and Model
 const bookSchema = new mongoose.Schema({
-  title: String,
-  author: String,
-  description: String,
+  title: { type: String, required: true },
+  author: { type: String, required: true },
+  description: { type: String, required: true },
   imageUrl: String,
   likes: { type: Number, default: 0 },
   reviews: [{ rating: Number, comment: String }],
@@ -20,70 +36,107 @@ const bookSchema = new mongoose.Schema({
 
 const Book = mongoose.model('Book', bookSchema);
 
-app.get('/api/books', async (req, res) => {
-  try {
+// Async Error Handler
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
+// Routes
+
+// Get all books (with optional search query)
+app.get(
+  '/api/books',
+  asyncHandler(async (req, res) => {
     const { search } = req.query;
     const query = search ? { title: new RegExp(search, 'i') } : {};
     const books = await Book.find(query);
-    res.json(books);
-  } catch (error) {
-    res.status(500).json({ error: 'Error fetching books' });
-  }
-});
+    res.status(200).json(books);
+  })
+);
 
-app.get('/api/books/:id', async (req, res) => {
-  try {
+// Get a single book by ID
+app.get(
+  '/api/books/:id',
+  asyncHandler(async (req, res) => {
     const book = await Book.findById(req.params.id);
     if (book) {
-      res.json(book);
+      res.status(200).json(book);
     } else {
       res.status(404).json({ error: 'Book not found' });
     }
-  } catch (error) {
-    res.status(500).json({ error: 'Error fetching book' });
-  }
-});
+  })
+);
 
-app.post('/api/books', async (req, res) => {
-  try {
+// Add a new book (with validation)
+app.post(
+  '/api/books',
+  [
+    body('title').isString().notEmpty(),
+    body('author').isString().notEmpty(),
+    body('description').isString().notEmpty(),
+  ],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
     const newBook = new Book(req.body);
     await newBook.save();
     res.status(201).json(newBook);
-  } catch (error) {
-    res.status(500).json({ error: 'Error adding book' });
-  }
-});
+  })
+);
 
-app.post('/api/books/:id/like', async (req, res) => {
-  try {
+// Add multiple books
+app.post(
+  '/api/books/multiple',
+  asyncHandler(async (req, res) => {
+    if (Array.isArray(req.body)) {
+      const newBooks = await Book.insertMany(req.body);
+      res.status(201).json(newBooks);
+    } else {
+      res.status(400).json({ error: 'Request body must be an array' });
+    }
+  })
+);
+
+// Like a book
+app.post(
+  '/api/books/:id/like',
+  asyncHandler(async (req, res) => {
     const book = await Book.findById(req.params.id);
     if (book) {
       book.likes += 1;
       await book.save();
-      res.json(book);
+      res.status(200).json(book);
     } else {
       res.status(404).json({ error: 'Book not found' });
     }
-  } catch (error) {
-    res.status(500).json({ error: 'Error liking book' });
-  }
-});
+  })
+);
 
-app.post('/api/books/:id/reviews', async (req, res) => {
-  try {
+// Add a review to a book
+app.post(
+  '/api/books/:id/reviews',
+  asyncHandler(async (req, res) => {
     const book = await Book.findById(req.params.id);
     if (book) {
       book.reviews.push(req.body);
       await book.save();
-      res.json(book);
+      res.status(201).json(book);
     } else {
       res.status(404).json({ error: 'Book not found' });
     }
-  } catch (error) {
-    res.status(500).json({ error: 'Error adding review' });
-  }
+  })
+);
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Something went wrong!' });
 });
 
-app.listen(3000, () => console.log('Server running on port 3000'));
+// Start Server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 export default app;
